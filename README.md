@@ -45,7 +45,7 @@ Windows 11 x64 桌面工具。黑色簡約介面、清松手寫體 9 文青、�
 
 ## 簽章與字體
 
-此交付版使用專案本機自簽憑證，不是由公開 CA 背書的商用簽章。首次執行 Windows 可能顯示未識別發行者或 SmartScreen 提示；此程式不會關閉 Windows 保護功能。僅適用於您自行建置／確認來源的個人使用版本。
+此交付版使用專案本機自簽憑證，不是由公開 CA 背書的商用簽章。首次執行 Windows 可能顯示未識別發行者或 SmartScreen 提示；此程式不會關閉 Windows 保護功能。可提供給已確認來源、願意信任此簽章的使用者安裝。
 
 憑證資訊可在安裝程式查看，也提供於 `dist/signer.cer`。私鑰僅保留在被忽略的 `build/signing/local-signing.pfx`，不隨安裝檔散布。要持續發布可直接升級的版本，請妥善離線備份此金鑰；刪除 `build/` 前先保全它。
 
@@ -60,6 +60,22 @@ Windows 11 x64 桌面工具。黑色簡約介面、清松手寫體 9 文青、�
 ```
 
 使用系統 .NET Framework C# 編譯器及專案內可攜 LLVM-MinGW／Microsoft Windows SDK BuildTools；不改系統 PATH。建置產物在 `dist/`，大型快取與私鑰不進 Git。
+
+## 提供給別人安裝與更新
+
+建置後執行以下命令，會重用已建置的安裝程式，產生 `dist/TarGz-1.0.1-Windows-x64.zip` 與外部 SHA-256 校驗碼：
+
+```powershell
+& D:\conda\envs\PEICD100\python.exe tools/release.py --version 1.0.1
+```
+
+ZIP 包含 `Setup.exe`、中文使用說明、公開憑證、字體作者／授權及檔案校驗碼。安裝套件已內嵌於 Setup，無需重複附上 MSIX。封裝前會檢查建置校驗碼與套件版本，完成後驗證 ZIP 清單、CRC 及所有內容；私鑰與原始碼不放入發布 ZIP。
+
+收件者先解壓縮，再執行 `Setup.exe` 安裝。更新時取得新版 ZIP，關閉程式後執行新版 Setup；目前不含自動檢查更新。新版本須遞增版本號並保留同一份簽章金鑰。
+
+版本下載：[GitHub Releases](https://github.com/peicd100/1_---tar.gz--/releases)。下載版本內的 `TarGz-版本-Windows-x64.zip` 即可安裝或更新；`.zip.sha256` 提供校驗碼。
+
+可直接傳送 ZIP，或將 ZIP 與 `.zip.sha256` 附加到 GitHub Release。私人儲存庫的 Release 僅供具存取權的人下載；若需提供公開下載，可另設公開發布儲存庫。建立本機 ZIP 不會自動發布 Release。
 
 ## 驗證
 

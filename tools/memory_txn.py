@@ -43,13 +43,13 @@ def verify():
             assert sha(archive.extractfile('.peicd100/codex/' + item['path']).read()) == item['sha256']
     return commit
 
-def update(status, note):
+def update(status, note, replacements=None, task_id='targz-progress-1-0-1'):
     BASE.mkdir(parents=True, exist_ok=True)
     PACKS.mkdir(parents=True, exist_ok=True)
     lock = BASE / 'tmp/memory_txn.lock'
     lock.parent.mkdir(exist_ok=True)
     fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    os.write(fd, encoded({'owner_pid': os.getpid(), 'task_id': 'targz-progress-1-0-1'}))
+    os.write(fd, encoded({'owner_pid': os.getpid(), 'task_id': task_id}))
     os.close(fd)
     try:
         previous = verify() if (BASE / 'MEMORY_COMMIT.json').exists() else {'generation': 0}
@@ -64,6 +64,13 @@ def update(status, note):
             'GOTCHAS.md': '# Gotchas\nNo dotnet SDK available initially; .NET Framework 4.8 csc is available. Legacy C:/MinGW fails (DLL relocation); project-local LLVM-MinGW works. Do not modify Conda environments. Use full interpreter path. Windows tar.exe failed UTF-8 list and crashed on emoji argv; managed PAX TAR/GZip is the implementation. Windows 11 modern menu requires native IExplorerCommand and package identity. Package certificate trust requires explicit installer action. Sandbox Get-AppxPackage is denied; real installation/lifecycle/Explorer display remains unverified. Preserve ignored build/signing/local-signing.pfx to keep upgrade identity.\n',
             'VERIFY.md': '# Validation\nRun tools/build.ps1; tests/smoke.ps1; tests/verify_package.py; tests/verify_signature.ps1. Inspect metadata, native exports, signed MSIX and payload SHA-256. Managed PAX TAR/GZip validation plus independent Python extraction content comparison. Windows Explorer integration and lifecycle require user installation; sandbox Get-AppxPackage is denied.\n'
         }
+        if replacements is not None:
+            docs = {item['path']: (BASE / item['path']).read_text('utf-8')
+                    for item in json.loads((BASE / 'MEMORY_INDEX.yaml').read_text('utf-8'))['manifest']}
+            assert set(replacements) <= set(docs)
+            docs.update(replacements)
+            docs['00_START_HERE.md'] = docs['00_START_HERE.md'].replace(
+                'Generation: %s' % previous['generation'], 'Generation: %s' % generation)
         for name, value in docs.items():
             atomic(BASE / name, value.encode('utf-8'))
         manifest = [{'topic': n, 'path': n, 'lifecycle': 'active', 'sha256': sha((BASE / n).read_bytes())} for n in sorted(docs, key=lambda n: n.encode('utf-8'))]
@@ -89,5 +96,8 @@ def update(status, note):
 if __name__ == '__main__':
     if sys.argv[1] == 'verify':
         print(verify())
+    elif sys.argv[1] == 'apply':
+        changes = json.loads(Path(sys.argv[2]).read_text('utf-8'))
+        update('completed', '', changes['documents'], changes['task_id'])
     else:
         update(sys.argv[1], sys.argv[2])
