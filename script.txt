@@ -1,0 +1,1447 @@
+& {
+
+$ErrorActionPreference = "Stop"
+
+$InstallDir = Join-Path $env:LOCALAPPDATA "CreateTarGzContextMenu"
+$WorkerPath = Join-Path $InstallDir "Create-TarGz-Multi.ps1"
+$LauncherPath = Join-Path $InstallDir "Create-TarGz-Multi.vbs"
+
+$SendToDir = Join-Path `
+    $env:APPDATA `
+    "Microsoft\Windows\SendTo"
+
+$ShortcutPath = Join-Path `
+    $SendToDir `
+    "建立 TAR.GZ.lnk"
+
+$LegacyVerbPath = `
+    "HKCU:\Software\Classes\AllFilesystemObjects\shell\PEICD.CreateTarGz"
+
+$TarExe = Join-Path `
+    $env:SystemRoot `
+    "System32\tar.exe"
+
+
+# ============================================================
+# Pre-check
+# ============================================================
+
+if (-not (
+    Test-Path `
+        -LiteralPath $TarExe `
+        -PathType Leaf
+)) {
+    throw "找不到 Windows 內建 tar.exe：$TarExe"
+}
+
+
+# ============================================================
+# Clean old installation
+# ============================================================
+
+Write-Host ""
+Write-Host "正在清理舊版..." `
+    -ForegroundColor Cyan
+
+
+Remove-Item `
+    -LiteralPath $LegacyVerbPath `
+    -Recurse `
+    -Force `
+    -ErrorAction SilentlyContinue
+
+
+Remove-Item `
+    -LiteralPath $ShortcutPath `
+    -Force `
+    -ErrorAction SilentlyContinue
+
+
+Remove-Item `
+    -LiteralPath (Join-Path $SendToDir "建立 TAR.GZ.cmd") `
+    -Force `
+    -ErrorAction SilentlyContinue
+
+
+Remove-Item `
+    -LiteralPath (Join-Path $SendToDir "建立 TAR.GZ.vbs") `
+    -Force `
+    -ErrorAction SilentlyContinue
+
+
+Remove-Item `
+    -LiteralPath $InstallDir `
+    -Recurse `
+    -Force `
+    -ErrorAction SilentlyContinue
+
+
+# ============================================================
+# Create directories
+# ============================================================
+
+New-Item `
+    -ItemType Directory `
+    -Path $InstallDir `
+    -Force | Out-Null
+
+
+New-Item `
+    -ItemType Directory `
+    -Path $SendToDir `
+    -Force | Out-Null
+
+
+# ============================================================
+# Worker
+# ============================================================
+
+$WorkerContent = @'
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string] $ManifestPath
+)
+
+$ErrorActionPreference = "Stop"
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+
+# ============================================================
+# Utility functions
+# ============================================================
+
+function Get-UniqueArchivePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $Path
+    }
+
+    $Directory = `
+        [System.IO.Path]::GetDirectoryName($Path)
+
+    $FileName = `
+        [System.IO.Path]::GetFileName($Path)
+
+    if ($FileName.EndsWith(
+        ".tar.gz",
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        $Stem = $FileName.Substring(
+            0,
+            $FileName.Length - 7
+        )
+    }
+    else {
+        $Stem = `
+            [System.IO.Path]::GetFileNameWithoutExtension(
+                $FileName
+            )
+    }
+
+    for ($Index = 1; ; $Index++) {
+
+        $Candidate = Join-Path `
+            $Directory `
+            ("{0}_v0.0.{1}.tar.gz" -f $Stem, $Index)
+
+        if (-not (
+            Test-Path -LiteralPath $Candidate
+        )) {
+            return $Candidate
+        }
+    }
+}
+
+
+function ConvertTo-NativeArgument {
+    param(
+        [AllowEmptyString()]
+        [string] $Argument
+    )
+
+    if ($null -eq $Argument) {
+        return '""'
+    }
+
+    if ($Argument.Length -eq 0) {
+        return '""'
+    }
+
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $Builder = `
+        New-Object System.Text.StringBuilder
+
+    [void] $Builder.Append('"')
+
+    $Backslashes = 0
+
+    foreach ($Character in $Argument.ToCharArray()) {
+
+        if ($Character -eq '\') {
+            $Backslashes++
+            continue
+        }
+
+        if ($Character -eq '"') {
+
+            if ($Backslashes -gt 0) {
+                [void] $Builder.Append(
+                    '\' * ($Backslashes * 2)
+                )
+            }
+
+            [void] $Builder.Append('\')
+            [void] $Builder.Append('"')
+
+            $Backslashes = 0
+
+            continue
+        }
+
+        if ($Backslashes -gt 0) {
+            [void] $Builder.Append(
+                '\' * $Backslashes
+            )
+
+            $Backslashes = 0
+        }
+
+        [void] $Builder.Append($Character)
+    }
+
+    if ($Backslashes -gt 0) {
+
+        [void] $Builder.Append(
+            '\' * ($Backslashes * 2)
+        )
+    }
+
+    [void] $Builder.Append('"')
+
+    return $Builder.ToString()
+}
+
+
+function Join-NativeArguments {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]] $Arguments
+    )
+
+    $Converted = @(
+        foreach ($Argument in $Arguments) {
+
+            ConvertTo-NativeArgument `
+                -Argument $Argument
+        }
+    )
+
+    return ($Converted -join " ")
+}
+
+
+function Invoke-HiddenProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $FilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string[]] $Arguments,
+
+        [string] $WorkingDirectory
+    )
+
+    $StartInfo = `
+        New-Object System.Diagnostics.ProcessStartInfo
+
+    $StartInfo.FileName = $FilePath
+
+    $StartInfo.Arguments = `
+        Join-NativeArguments `
+            -Arguments $Arguments
+
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.CreateNoWindow = $true
+
+    $StartInfo.RedirectStandardOutput = $true
+    $StartInfo.RedirectStandardError = $true
+
+    if (-not [string]::IsNullOrWhiteSpace(
+        $WorkingDirectory
+    )) {
+        $StartInfo.WorkingDirectory = `
+            $WorkingDirectory
+    }
+
+
+    $Process = `
+        New-Object System.Diagnostics.Process
+
+    $Process.StartInfo = $StartInfo
+
+
+    try {
+
+        if (-not $Process.Start()) {
+            throw "無法啟動：$FilePath"
+        }
+
+
+        # stdout 可能非常大，例如 tar -tf。
+        # 直接丟棄，不全部存入記憶體。
+        $OutputDrainTask = `
+            $Process.StandardOutput.BaseStream.CopyToAsync(
+                [System.IO.Stream]::Null
+            )
+
+
+        # stderr 通常只在失敗時有內容。
+        $ErrorTask = `
+            $Process.StandardError.ReadToEndAsync()
+
+
+        while (-not $Process.HasExited) {
+
+            [System.Windows.Forms.Application]::DoEvents()
+
+            Start-Sleep `
+                -Milliseconds 50
+        }
+
+
+        $Process.WaitForExit()
+
+        $OutputDrainTask.Wait()
+
+        $StandardError = `
+            $ErrorTask.Result
+
+
+        return [PSCustomObject]@{
+            ExitCode      = $Process.ExitCode
+            StandardError = [string] $StandardError
+        }
+    }
+    finally {
+
+        if ($null -ne $Process) {
+            $Process.Dispose()
+        }
+    }
+}
+
+
+function Update-Ui {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Status,
+
+        [string] $Details
+    )
+
+    $script:StatusLabel.Text = $Status
+
+    if ($null -ne $Details) {
+        $script:DetailsBox.Text = $Details
+    }
+
+    $script:Form.Refresh()
+
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+
+function Set-FinalState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [bool] $Success,
+
+        [Parameter(Mandatory = $true)]
+        [string] $Title,
+
+        [Parameter(Mandatory = $true)]
+        [string] $Status,
+
+        [Parameter(Mandatory = $true)]
+        [string] $Details
+    )
+
+    $script:Form.Text = $Title
+    $script:TitleLabel.Text = $Title
+    $script:StatusLabel.Text = $Status
+    $script:DetailsBox.Text = $Details
+
+
+    $script:ProgressBar.MarqueeAnimationSpeed = 0
+
+    $script:ProgressBar.Style = `
+        [System.Windows.Forms.ProgressBarStyle]::Blocks
+
+    $script:ProgressBar.Minimum = 0
+    $script:ProgressBar.Maximum = 100
+
+
+    if ($Success) {
+        $script:ProgressBar.Value = 100
+        $script:CloseButton.Text = "確定"
+    }
+    else {
+        $script:ProgressBar.Value = 0
+        $script:CloseButton.Text = "關閉"
+    }
+
+
+    $script:IsFinished = $true
+
+    $script:CloseButton.Visible = $true
+    $script:CloseButton.Enabled = $true
+
+    $script:CloseButton.Focus()
+
+    $script:Form.Refresh()
+}
+
+
+# ============================================================
+# GUI
+# ============================================================
+
+$script:IsFinished = $false
+$script:WorkflowStarted = $false
+
+
+$script:Form = `
+    New-Object System.Windows.Forms.Form
+
+
+$script:Form.Text = "建立 TAR.GZ"
+
+$script:Form.StartPosition = `
+    [System.Windows.Forms.FormStartPosition]::CenterScreen
+
+$script:Form.FormBorderStyle = `
+    [System.Windows.Forms.FormBorderStyle]::FixedDialog
+
+$script:Form.ClientSize = `
+    New-Object System.Drawing.Size(620, 340)
+
+$script:Form.MaximizeBox = $false
+$script:Form.MinimizeBox = $false
+
+# 工作完成前沒有 X 按鈕，
+# 避免使用者誤關閉正在壓縮的工作。
+$script:Form.ControlBox = $false
+
+$script:Form.ShowInTaskbar = $true
+
+$script:Form.AutoScaleMode = `
+    [System.Windows.Forms.AutoScaleMode]::Font
+
+$script:Form.Font = `
+    [System.Drawing.SystemFonts]::MessageBoxFont
+
+
+# ------------------------------------------------------------
+# Title
+# ------------------------------------------------------------
+
+$script:TitleLabel = `
+    New-Object System.Windows.Forms.Label
+
+$script:TitleLabel.Location = `
+    New-Object System.Drawing.Point(26, 20)
+
+$script:TitleLabel.Size = `
+    New-Object System.Drawing.Size(565, 32)
+
+$script:TitleLabel.Text = `
+    "正在建立 TAR.GZ"
+
+$script:TitleLabel.UseMnemonic = $false
+
+
+try {
+    $script:TitleLabel.Font = `
+        New-Object System.Drawing.Font `
+            -ArgumentList @(
+                $script:Form.Font.FontFamily,
+                15,
+                [System.Drawing.FontStyle]::Bold
+            )
+}
+catch {
+    # 字型建立失敗時直接使用系統預設字型。
+}
+
+
+# ------------------------------------------------------------
+# Status
+# ------------------------------------------------------------
+
+$script:StatusLabel = `
+    New-Object System.Windows.Forms.Label
+
+$script:StatusLabel.Location = `
+    New-Object System.Drawing.Point(28, 62)
+
+$script:StatusLabel.Size = `
+    New-Object System.Drawing.Size(565, 24)
+
+$script:StatusLabel.Text = `
+    "正在準備..."
+
+$script:StatusLabel.UseMnemonic = $false
+
+
+# ------------------------------------------------------------
+# Progress
+# ------------------------------------------------------------
+
+$script:ProgressBar = `
+    New-Object System.Windows.Forms.ProgressBar
+
+$script:ProgressBar.Location = `
+    New-Object System.Drawing.Point(28, 96)
+
+$script:ProgressBar.Size = `
+    New-Object System.Drawing.Size(564, 24)
+
+$script:ProgressBar.Style = `
+    [System.Windows.Forms.ProgressBarStyle]::Marquee
+
+$script:ProgressBar.MarqueeAnimationSpeed = 25
+
+
+# ------------------------------------------------------------
+# Details caption
+# ------------------------------------------------------------
+
+$DetailsCaption = `
+    New-Object System.Windows.Forms.Label
+
+$DetailsCaption.Location = `
+    New-Object System.Drawing.Point(28, 138)
+
+$DetailsCaption.Size = `
+    New-Object System.Drawing.Size(200, 20)
+
+$DetailsCaption.Text = "詳細資料"
+
+$DetailsCaption.UseMnemonic = $false
+
+
+# ------------------------------------------------------------
+# Details
+# ------------------------------------------------------------
+
+$script:DetailsBox = `
+    New-Object System.Windows.Forms.TextBox
+
+$script:DetailsBox.Location = `
+    New-Object System.Drawing.Point(28, 162)
+
+$script:DetailsBox.Size = `
+    New-Object System.Drawing.Size(564, 112)
+
+$script:DetailsBox.Multiline = $true
+$script:DetailsBox.ReadOnly = $true
+
+$script:DetailsBox.ScrollBars = `
+    [System.Windows.Forms.ScrollBars]::Vertical
+
+$script:DetailsBox.WordWrap = $true
+
+$script:DetailsBox.BackColor = `
+    [System.Drawing.SystemColors]::Window
+
+$script:DetailsBox.Text = `
+    "正在讀取選取項目..."
+
+
+# ------------------------------------------------------------
+# Elapsed time
+# ------------------------------------------------------------
+
+$script:ElapsedLabel = `
+    New-Object System.Windows.Forms.Label
+
+$script:ElapsedLabel.Location = `
+    New-Object System.Drawing.Point(28, 298)
+
+$script:ElapsedLabel.Size = `
+    New-Object System.Drawing.Size(280, 24)
+
+$script:ElapsedLabel.Text = `
+    "已經過：00:00:00"
+
+$script:ElapsedLabel.UseMnemonic = $false
+
+
+# ------------------------------------------------------------
+# Close button
+# ------------------------------------------------------------
+
+$script:CloseButton = `
+    New-Object System.Windows.Forms.Button
+
+$script:CloseButton.Location = `
+    New-Object System.Drawing.Point(492, 292)
+
+$script:CloseButton.Size = `
+    New-Object System.Drawing.Size(100, 32)
+
+$script:CloseButton.Text = "確定"
+
+$script:CloseButton.Visible = $false
+$script:CloseButton.Enabled = $false
+
+
+$script:CloseButton.Add_Click({
+
+    $script:Form.Close()
+})
+
+
+# ------------------------------------------------------------
+# Controls
+# ------------------------------------------------------------
+
+$script:Form.Controls.Add(
+    $script:TitleLabel
+)
+
+$script:Form.Controls.Add(
+    $script:StatusLabel
+)
+
+$script:Form.Controls.Add(
+    $script:ProgressBar
+)
+
+$script:Form.Controls.Add(
+    $DetailsCaption
+)
+
+$script:Form.Controls.Add(
+    $script:DetailsBox
+)
+
+$script:Form.Controls.Add(
+    $script:ElapsedLabel
+)
+
+$script:Form.Controls.Add(
+    $script:CloseButton
+)
+
+
+# ============================================================
+# Prevent premature closing
+# ============================================================
+
+$script:Form.Add_FormClosing({
+
+    param(
+        $Sender,
+        $EventArgs
+    )
+
+    if (-not $script:IsFinished) {
+
+        $EventArgs.Cancel = $true
+    }
+})
+
+
+# ============================================================
+# Elapsed timer
+# ============================================================
+
+$script:Stopwatch = `
+    New-Object System.Diagnostics.Stopwatch
+
+
+$script:ElapsedTimer = `
+    New-Object System.Windows.Forms.Timer
+
+$script:ElapsedTimer.Interval = 250
+
+
+$script:ElapsedTimer.Add_Tick({
+
+    if ($script:Stopwatch.IsRunning) {
+
+        $script:ElapsedLabel.Text = (
+            "已經過：" +
+            $script:Stopwatch.Elapsed.ToString(
+                "hh\:mm\:ss"
+            )
+        )
+    }
+})
+
+
+# ============================================================
+# Main workflow
+# ============================================================
+
+function Invoke-ArchiveWorkflow {
+
+    $Succeeded = $false
+
+    $FailureMessage = ""
+
+    $SuccessDetails = ""
+
+    $ArchivePath = $null
+
+
+    try {
+
+        Update-Ui `
+            -Status "正在讀取選取項目..." `
+            -Details "正在準備壓縮作業..."
+
+
+        if (-not (
+            Test-Path `
+                -LiteralPath $ManifestPath `
+                -PathType Leaf
+        )) {
+            throw "找不到選取項目清單：$ManifestPath"
+        }
+
+
+        $TargetPaths = @(
+
+            Get-Content `
+                -LiteralPath $ManifestPath `
+                -Encoding Unicode |
+
+            Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            } |
+
+            Select-Object -Unique
+        )
+
+
+        if ($TargetPaths.Count -eq 0) {
+            throw "沒有收到任何檔案或資料夾。"
+        }
+
+
+        # ----------------------------------------------------
+        # Resolve selected items
+        # ----------------------------------------------------
+
+        $Items = @(
+
+            foreach ($TargetPath in $TargetPaths) {
+
+                Get-Item `
+                    -LiteralPath $TargetPath `
+                    -Force `
+                    -ErrorAction Stop
+            }
+        )
+
+
+        # ----------------------------------------------------
+        # Same parent directory check
+        # ----------------------------------------------------
+
+        $ParentDirectories = @(
+
+            $Items |
+
+            ForEach-Object {
+
+                [System.IO.Path]::GetDirectoryName(
+                    $_.FullName
+                )
+            } |
+
+            Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            } |
+
+            Sort-Object -Unique
+        )
+
+
+        if ($ParentDirectories.Count -ne 1) {
+
+            throw (
+                "多選項目必須位於同一個資料夾。" +
+                "`r`n" +
+                "請不要從搜尋結果混選不同位置的檔案。"
+            )
+        }
+
+
+        $ParentDirectory = `
+            $ParentDirectories[0]
+
+
+        if ([string]::IsNullOrWhiteSpace(
+            $ParentDirectory
+        )) {
+            throw "不支援直接壓縮磁碟根目錄。"
+        }
+
+
+        # ----------------------------------------------------
+        # File / directory names
+        # ----------------------------------------------------
+
+        $LeafNames = @(
+
+            $Items |
+
+            ForEach-Object {
+                $_.Name
+            }
+        )
+
+
+        # ----------------------------------------------------
+        # Archive name
+        # ----------------------------------------------------
+
+        if ($Items.Count -eq 1) {
+
+            $ArchiveStem = `
+                $Items[0].Name
+        }
+        else {
+
+            $ArchiveStem = (
+                "選取項目_{0}個_{1}" -f `
+                    $Items.Count,
+                    (Get-Date -Format "yyyyMMdd_HHmmss")
+            )
+        }
+
+
+        $InitialArchivePath = Join-Path `
+            $ParentDirectory `
+            ($ArchiveStem + ".tar.gz")
+
+
+        $ArchivePath = `
+            Get-UniqueArchivePath `
+                -Path $InitialArchivePath
+
+
+        # ----------------------------------------------------
+        # tar.exe
+        # ----------------------------------------------------
+
+        $TarExe = Join-Path `
+            $env:SystemRoot `
+            "System32\tar.exe"
+
+
+        if (-not (
+            Test-Path `
+                -LiteralPath $TarExe `
+                -PathType Leaf
+        )) {
+            throw "找不到 Windows 內建 tar.exe：$TarExe"
+        }
+
+
+        $RunningDetails = @(
+
+            "項目數：$($Items.Count)"
+
+            ""
+
+            "輸出："
+
+            $ArchivePath
+
+        ) -join "`r`n"
+
+
+        # ====================================================
+        # Phase 1 - Compress
+        # ====================================================
+
+        Update-Ui `
+            -Status "正在建立 TAR.GZ..." `
+            -Details $RunningDetails
+
+
+        $CreateArguments = @(
+
+            "-czf"
+
+            $ArchivePath
+
+            "-C"
+
+            $ParentDirectory
+
+            "--"
+
+        ) + $LeafNames
+
+
+        $CreateResult = `
+            Invoke-HiddenProcess `
+                -FilePath $TarExe `
+                -Arguments $CreateArguments `
+                -WorkingDirectory $ParentDirectory
+
+
+        if ($CreateResult.ExitCode -ne 0) {
+
+            Remove-Item `
+                -LiteralPath $ArchivePath `
+                -Force `
+                -ErrorAction SilentlyContinue
+
+
+            $CreateError = `
+                $CreateResult.StandardError.Trim()
+
+
+            if ([string]::IsNullOrWhiteSpace(
+                $CreateError
+            )) {
+
+                $CreateError = `
+                    "tar.exe 沒有提供額外錯誤內容。"
+            }
+
+
+            throw (
+                "tar.exe 建立失敗。" +
+                "`r`n" +
+                "Exit Code：" +
+                $CreateResult.ExitCode +
+                "`r`n`r`n" +
+                $CreateError
+            )
+        }
+
+
+        if (-not (
+            Test-Path `
+                -LiteralPath $ArchivePath `
+                -PathType Leaf
+        )) {
+
+            throw (
+                "tar.exe 回報成功，" +
+                "但找不到輸出的 TAR.GZ。"
+            )
+        }
+
+
+        # ====================================================
+        # Phase 2 - Verify
+        # ====================================================
+
+        Update-Ui `
+            -Status "壓縮完成，正在驗證完整性..." `
+            -Details (
+                $RunningDetails +
+                "`r`n`r`n" +
+                "驗證方式：tar.exe -tf"
+            )
+
+
+        $VerifyArguments = @(
+
+            "-tf"
+
+            $ArchivePath
+        )
+
+
+        $VerifyResult = `
+            Invoke-HiddenProcess `
+                -FilePath $TarExe `
+                -Arguments $VerifyArguments `
+                -WorkingDirectory $ParentDirectory
+
+
+        if ($VerifyResult.ExitCode -ne 0) {
+
+            $VerifyError = `
+                $VerifyResult.StandardError.Trim()
+
+
+            if ([string]::IsNullOrWhiteSpace(
+                $VerifyError
+            )) {
+
+                $VerifyError = `
+                    "tar.exe 沒有提供額外錯誤內容。"
+            }
+
+
+            throw (
+                "壓縮檔已建立，" +
+                "但完整性驗證失敗。" +
+                "`r`n" +
+                "Exit Code：" +
+                $VerifyResult.ExitCode +
+                "`r`n`r`n" +
+                $VerifyError
+            )
+        }
+
+
+        # ====================================================
+        # Success
+        # ====================================================
+
+        $ArchiveInfo = `
+            Get-Item `
+                -LiteralPath $ArchivePath `
+                -Force
+
+
+        $ArchiveSizeMiB = `
+            [math]::Round(
+                $ArchiveInfo.Length / 1MB,
+                2
+            )
+
+
+        $SuccessDetails = @(
+
+            "已建立並通過完整性驗證："
+
+            ""
+
+            $ArchivePath
+
+            ""
+
+            "項目數：$($Items.Count)"
+
+            "大小：$ArchiveSizeMiB MiB"
+
+        ) -join "`r`n"
+
+
+        $Succeeded = $true
+    }
+    catch {
+
+        $FailureMessage = `
+            $_.Exception.Message
+    }
+    finally {
+
+        if (-not [string]::IsNullOrWhiteSpace(
+            $ManifestPath
+        )) {
+
+            Remove-Item `
+                -LiteralPath $ManifestPath `
+                -Force `
+                -ErrorAction SilentlyContinue
+        }
+
+
+        $script:Stopwatch.Stop()
+
+        $script:ElapsedTimer.Stop()
+
+
+        $script:ElapsedLabel.Text = (
+            "已經過：" +
+            $script:Stopwatch.Elapsed.ToString(
+                "hh\:mm\:ss"
+            )
+        )
+    }
+
+
+    # ========================================================
+    # Final screen
+    # ========================================================
+
+    if ($Succeeded) {
+
+        Set-FinalState `
+            -Success $true `
+            -Title "TAR.GZ 建立完成" `
+            -Status "已建立並通過完整性驗證。" `
+            -Details $SuccessDetails
+    }
+    else {
+
+        if ([string]::IsNullOrWhiteSpace(
+            $FailureMessage
+        )) {
+
+            $FailureMessage = `
+                "發生未知錯誤。"
+        }
+
+
+        Set-FinalState `
+            -Success $false `
+            -Title "建立 TAR.GZ 失敗" `
+            -Status "壓縮作業未完成。" `
+            -Details $FailureMessage
+    }
+}
+
+
+# ============================================================
+# Start after form becomes visible
+# ============================================================
+
+$script:StartTimer = `
+    New-Object System.Windows.Forms.Timer
+
+$script:StartTimer.Interval = 100
+
+
+$script:StartTimer.Add_Tick({
+
+    $script:StartTimer.Stop()
+
+    if ($script:WorkflowStarted) {
+        return
+    }
+
+    $script:WorkflowStarted = $true
+
+
+    if (-not $script:Stopwatch.IsRunning) {
+
+        $script:Stopwatch.Start()
+    }
+
+
+    $script:ElapsedTimer.Start()
+
+
+    Invoke-ArchiveWorkflow
+})
+
+
+$script:Form.Add_Shown({
+
+    $script:StartTimer.Start()
+})
+
+
+try {
+
+    [System.Windows.Forms.Application]::Run(
+        $script:Form
+    )
+}
+finally {
+
+    if ($null -ne $script:ElapsedTimer) {
+
+        $script:ElapsedTimer.Stop()
+
+        $script:ElapsedTimer.Dispose()
+    }
+
+
+    if ($null -ne $script:StartTimer) {
+
+        $script:StartTimer.Stop()
+
+        $script:StartTimer.Dispose()
+    }
+
+
+    if ($null -ne $script:Form) {
+
+        $script:Form.Dispose()
+    }
+}
+'@
+
+
+# ============================================================
+# VBS launcher
+# ============================================================
+
+$LauncherContent = @'
+Option Explicit
+
+Dim Shell
+Dim FileSystem
+Dim ManifestPath
+Dim ManifestFile
+Dim PowerShellExe
+Dim WorkerPath
+Dim Command
+Dim Quote
+Dim Index
+
+
+Set Shell = CreateObject("WScript.Shell")
+
+Set FileSystem = _
+    CreateObject("Scripting.FileSystemObject")
+
+
+If WScript.Arguments.Count = 0 Then
+
+    Shell.Popup _
+        "沒有收到任何檔案或資料夾。", _
+        0, _
+        "建立 TAR.GZ", _
+        16
+
+    WScript.Quit 1
+
+End If
+
+
+ManifestPath = FileSystem.BuildPath( _
+    Shell.ExpandEnvironmentStrings("%TEMP%"), _
+    FileSystem.GetTempName _
+)
+
+
+Set ManifestFile = _
+    FileSystem.CreateTextFile( _
+        ManifestPath, _
+        True, _
+        True _
+    )
+
+
+For Index = 0 To WScript.Arguments.Count - 1
+
+    ManifestFile.WriteLine _
+        WScript.Arguments(Index)
+
+Next
+
+
+ManifestFile.Close
+
+
+PowerShellExe = _
+    Shell.ExpandEnvironmentStrings( _
+        "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" _
+    )
+
+
+WorkerPath = _
+    Shell.ExpandEnvironmentStrings( _
+        "%LOCALAPPDATA%\CreateTarGzContextMenu\Create-TarGz-Multi.ps1" _
+    )
+
+
+Quote = Chr(34)
+
+
+Command = _
+    Quote & PowerShellExe & Quote & _
+    " -NoProfile" & _
+    " -STA" & _
+    " -ExecutionPolicy Bypass" & _
+    " -WindowStyle Hidden" & _
+    " -File " & _
+    Quote & WorkerPath & Quote & _
+    " -ManifestPath " & _
+    Quote & ManifestPath & Quote
+
+
+Shell.Run Command, 0, False
+'@
+
+
+# ============================================================
+# Write files
+# ============================================================
+
+Write-Host "正在安裝程式檔案..." `
+    -ForegroundColor Cyan
+
+
+Set-Content `
+    -LiteralPath $WorkerPath `
+    -Value $WorkerContent `
+    -Encoding UTF8
+
+
+Set-Content `
+    -LiteralPath $LauncherPath `
+    -Value $LauncherContent `
+    -Encoding Unicode
+
+
+# ============================================================
+# Create SendTo shortcut
+# ============================================================
+
+Write-Host "正在建立「傳送到」捷徑..." `
+    -ForegroundColor Cyan
+
+
+$WScriptExe = Join-Path `
+    $env:SystemRoot `
+    "System32\wscript.exe"
+
+
+$WshShell = `
+    New-Object -ComObject WScript.Shell
+
+
+try {
+
+    $Shortcut = `
+        $WshShell.CreateShortcut(
+            $ShortcutPath
+        )
+
+
+    $Shortcut.TargetPath = `
+        $WScriptExe
+
+
+    $Shortcut.Arguments = `
+        "`"$LauncherPath`""
+
+
+    $Shortcut.WorkingDirectory = `
+        $InstallDir
+
+
+    $Shortcut.IconLocation = `
+        "$TarExe,0"
+
+
+    $Shortcut.Description = `
+        "將選取項目建立為單一 TAR.GZ"
+
+
+    $Shortcut.Save()
+
+
+    [void] [
+        System.Runtime.InteropServices.Marshal
+    ]::FinalReleaseComObject(
+        $Shortcut
+    )
+}
+finally {
+
+    [void] [
+        System.Runtime.InteropServices.Marshal
+    ]::FinalReleaseComObject(
+        $WshShell
+    )
+}
+
+
+# ============================================================
+# Verification
+# ============================================================
+
+$RequiredPaths = @(
+
+    $WorkerPath
+
+    $LauncherPath
+
+    $ShortcutPath
+)
+
+
+$MissingPaths = @(
+
+    $RequiredPaths |
+
+    Where-Object {
+
+        -not (
+            Test-Path `
+                -LiteralPath $_ `
+                -PathType Leaf
+        )
+    }
+)
+
+
+if ($MissingPaths.Count -gt 0) {
+
+    throw (
+        "安裝驗證失敗，缺少：" +
+        "`n`n" +
+        ($MissingPaths -join "`n")
+    )
+}
+
+
+# ============================================================
+# Result
+# ============================================================
+
+Write-Host ""
+Write-Host "========================================" `
+    -ForegroundColor Green
+
+Write-Host "TAR.GZ 功能安裝完成" `
+    -ForegroundColor Green
+
+Write-Host "========================================" `
+    -ForegroundColor Green
+
+Write-Host ""
+
+Write-Host "Worker："
+Write-Host "  $WorkerPath"
+
+Write-Host ""
+
+Write-Host "Launcher："
+Write-Host "  $LauncherPath"
+
+Write-Host ""
+
+Write-Host "傳送到捷徑："
+Write-Host "  $ShortcutPath"
+
+Write-Host ""
+
+Write-Host "使用方式：" `
+    -ForegroundColor Cyan
+
+Write-Host (
+    "1. 在檔案總管選取檔案或資料夾"
+)
+
+Write-Host (
+    "2. 右鍵 → 顯示其他選項 → " +
+    "傳送到 → 建立 TAR.GZ"
+)
+
+Write-Host ""
+
+Write-Host "安裝驗證：通過" `
+    -ForegroundColor Green
+
+}

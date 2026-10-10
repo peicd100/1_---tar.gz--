@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+ xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+ xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+ xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+ xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+ xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+ IgnorableNamespaces="uap desktop4 desktop5 com rescap">
+ <Identity Name="PEICD.TarGz" Publisher="CN=PEICD TarGz Local" Version="1.0.0.0" ProcessorArchitecture="x64" />
+ <Properties><DisplayName>壓縮成 tar.gz</DisplayName><PublisherDisplayName>PEICD</PublisherDisplayName><Logo>Assets\StoreLogo.png</Logo></Properties>
+ <Resources><Resource Language="zh-TW" /></Resources>
+ <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
+ <Applications>
+  <Application Id="App" Executable="TarGz.exe" EntryPoint="Windows.FullTrustApplication">
+   <uap:VisualElements DisplayName="壓縮成 tar.gz" Description="將選取項目封存成 tar.gz" BackgroundColor="#141414"
+     Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
+   <Extensions>
+    <com:Extension Category="windows.comServer"><com:ComServer><com:SurrogateServer DisplayName="PEICD TAR.GZ">
+     <com:Class Id="D67DBF63-9748-4E72-B7C8-8D17C5BD9377" Path="TarGzShell.dll" ThreadingModel="STA" />
+    </com:SurrogateServer></com:ComServer></com:Extension>
+    <desktop4:Extension Category="windows.fileExplorerContextMenus"><desktop4:FileExplorerContextMenus>
+     <desktop5:ItemType Type="*"><desktop5:Verb Id="CompressTarGz" Clsid="D67DBF63-9748-4E72-B7C8-8D17C5BD9377" /></desktop5:ItemType>
+     <desktop5:ItemType Type="Directory"><desktop5:Verb Id="CompressTarGz" Clsid="D67DBF63-9748-4E72-B7C8-8D17C5BD9377" /></desktop5:ItemType>
+    </desktop4:FileExplorerContextMenus></desktop4:Extension>
+   </Extensions>
+  </Application>
+ </Applications>
+ <Capabilities><rescap:Capability Name="runFullTrust" /></Capabilities>
+</Package>

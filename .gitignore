@@ -1,0 +1,10 @@
+/build/
+/dist/
+/assets/*.ttf
+/.peicd100/codex/
+/.peicd100/codex_compressed/
+/.peicd100/codex/tmp/
+/.peicd100/codex/artifacts/
+*.pfx
+*.key
+__pycache__/
