@@ -6,6 +6,8 @@ import subprocess
 import tarfile
 import time
 import os
+import re
+from datetime import datetime, timedelta
 
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / 'build/package/TarGz.exe'
@@ -18,11 +20,21 @@ def run(paths, expected=0, cancel=0):
     cmd = [str(EXE), '--compress', '--report', str(report)]
     if cancel:
         cmd += ['--cancel-after-ms', str(cancel)]
+    started = datetime.now().replace(microsecond=0)
     process = subprocess.run(cmd + ['--'] + [str(p) for p in paths], timeout=90)
+    finished = datetime.now()
     text = report.read_text('utf-8')
     assert process.returncode == expected, (process.returncode, text)
     assert not list(WORK.rglob('*.partial')), 'Partial archive leaked'
-    return Path(text) if expected == 0 else text
+    if expected == 0:
+        output = Path(text)
+        unique = list(dict.fromkeys(paths))
+        stem = unique[0].name if len(unique) == 1 else '選取項目_%d個' % len(unique)
+        match = re.fullmatch(re.escape(stem) + r'_(\d{8}_\d{6})(?:_v0\.0\.\d+)?\.tar\.gz', output.name)
+        assert match, output.name
+        assert started <= datetime.strptime(match[1], '%Y%m%d_%H%M%S') <= finished
+        return output
+    return text
 
 def record(name):
     results.append({'test': name, 'result': 'PASS'})
@@ -41,9 +53,17 @@ with tarfile.open(archive) as tar:
 record('single directory: Unicode, spaces, punctuation, hidden, empty files and folder, byte-for-byte round trip')
 
 old_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+# Preoccupy the possible start times, so crossing a second cannot weaken the collision check.
+occupied = []
+for seconds in range(120):
+    target = WORK / (folder.name + '_' + (datetime.now() + timedelta(seconds=seconds)).strftime('%Y%m%d_%H%M%S') + '.tar.gz')
+    if not target.exists():
+        target.write_bytes(b'existing archive must not be overwritten')
+        occupied.append(target)
 second = run([folder])
 assert second.name.endswith('_v0.0.1.tar.gz')
 assert hashlib.sha256(archive.read_bytes()).hexdigest() == old_hash
+assert all(p.read_bytes() == b'existing archive must not be overwritten' for p in occupied)
 record('collision: preserves existing archive and increments version')
 
 multi = run([folder / '文字🌙.txt', folder / '-dash.txt', folder / '空資料夾', folder / '文字🌙.txt'])
@@ -53,6 +73,11 @@ with tarfile.open(multi) as tar:
     assert tar.extractfile('./文字🌙.txt').read() == contents['文字🌙.txt']
     assert tar.extractfile('./-dash.txt').read() == b'dash'
 record('multiple siblings: one archive, deduplicated selection, option-like filename')
+
+single = run([folder / '文字🌙.txt'])
+with tarfile.open(single) as tar:
+    assert tar.extractfile('./文字🌙.txt').read() == contents['文字🌙.txt']
+record('single file: original extension plus local date/time, byte-for-byte round trip')
 
 assert '同一個' in run([folder, folder / '文字🌙.txt'], expected=1)
 record('reject mixed parents without partial output')
@@ -69,7 +94,7 @@ with large.open('wb') as stream:
         stream.write(os.urandom(1024 * 1024))
 before = hashlib.sha256(large.read_bytes()).hexdigest()
 assert 'OperationCanceledException' in run([large], expected=3, cancel=30)
-assert not (WORK / 'cancel-test.bin.tar.gz').exists()
+assert not list(WORK.glob('cancel-test.bin_*.tar.gz'))
 assert hashlib.sha256(large.read_bytes()).hexdigest() == before
 record('cancellation: worker stopped, partial removed, source preserved')
 

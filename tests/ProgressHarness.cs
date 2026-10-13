@@ -31,21 +31,23 @@ class ProgressHarness {
             var random = new Random(721); byte[] bytes = new byte[4 * 1024 * 1024]; random.NextBytes(bytes);
             string source = Path.Combine(root, "measured.bin"); File.WriteAllBytes(source, bytes);
             var measured = new Recorder();
-            measured.Hook = p => { if (p.Percent == 100) Assert(File.Exists(source + ".tar.gz"), "100 before publication"); };
-            Archive.Create(new[] { source }, measured, CancellationToken.None).GetAwaiter().GetResult(); Verify(measured, true);
+            measured.Hook = p => { if (p.Percent == 100) Assert(Directory.GetFiles(root, "measured.bin_*.tar.gz").Length == 1, "100 before publication"); };
+            string published = Archive.Create(new[] { source }, measured, CancellationToken.None).GetAwaiter().GetResult(); Verify(measured, true);
+            Assert(File.Exists(published), "returned output missing");
             Assert(measured.Events.Any(p => p.Percent > 0 && p.Percent < 90), "no intermediate byte progress");
             Console.WriteLine("Measured file: intermediate values, monotonic range, verification, 100 after publication PASS");
             string empty = Path.Combine(root, "empty-folder"); Directory.CreateDirectory(empty); File.WriteAllBytes(Path.Combine(empty, "empty.txt"), new byte[0]);
             var zero = new Recorder(); Archive.Create(new[] { empty }, zero, CancellationToken.None).GetAwaiter().GetResult(); Verify(zero, true);
             Console.WriteLine("Empty file/folder: reaches completion without division by zero PASS");
             var stopped = new Recorder();
+            string[] beforeCancellation = Directory.GetFiles(root, "*.tar.gz").OrderBy(p => p).ToArray();
             using (var cancel = new CancellationTokenSource()) {
                 stopped.Hook = p => { if (p.Percent >= 10) cancel.Cancel(); };
                 bool caught = false;
                 try { Archive.Create(new[] { source }, stopped, cancel.Token).GetAwaiter().GetResult(); }
                 catch (OperationCanceledException) { caught = true; }
                 Assert(caught, "cancellation ignored"); Verify(stopped, false);
-                Assert(!File.Exists(source + "_v0.0.1.tar.gz"), "cancelled output published");
+                Assert(beforeCancellation.SequenceEqual(Directory.GetFiles(root, "*.tar.gz").OrderBy(p => p)), "cancelled output published");
             }
             Assert(!Directory.GetFiles(root, "*.partial").Any(), "partial leaked");
             Console.WriteLine("Cancellation: never 100, no published/partial output PASS");

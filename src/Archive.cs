@@ -142,6 +142,7 @@ namespace Peicd.TarGz {
             return Task.Run(() => CreateInternal(selection, progress, token), token);
         }
         static string CreateInternal(string[] selection, IProgress<ArchiveProgress> progress, CancellationToken token) {
+            DateTime startedAt = DateTime.Now;
             progress.Report(new ArchiveProgress("正在計算檔案大小…", 0));
             string[] paths = selection.Select(p => Path.GetFullPath(p).TrimEnd('\\')).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (paths.Length == 0) throw new IOException("請選取檔案或資料夾。");
@@ -153,7 +154,9 @@ namespace Peicd.TarGz {
             if (parents.Length != 1) throw new IOException("請選取同一個資料夾內的項目，再合併壓縮。");
             long total = 0; foreach (string path in paths) total = checked(total + CountWork(path, token));
             var work = new WorkProgress(progress, total);
-            string parent = parents[0], stem = paths.Length == 1 ? Path.GetFileName(paths[0]) : "選取項目_" + paths.Length + "個_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string parent = parents[0];
+            string stem = (paths.Length == 1 ? Path.GetFileName(paths[0]) : "選取項目_" + paths.Length + "個")
+                + "_" + startedAt.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
             string partial = Path.Combine(parent, ".peicd-targz-" + Guid.NewGuid().ToString("N") + ".partial");
             try {
                 using (var file = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None, 131072, FileOptions.SequentialScan))

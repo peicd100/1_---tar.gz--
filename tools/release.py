@@ -41,6 +41,9 @@ def release(version):
 請先確認提供者與檔案來源；本程式不會關閉 Windows 保護功能。
 
 使用：在檔案總管選取檔案或資料夾，右鍵 →「壓縮成 tar.gz」。
+輸出名稱包含開始壓縮時的本機日期與時間，例如：資料夾_20261014_153025.tar.gz。
+單檔保留原副檔名；多選使用「選取項目_數量個_日期_時間.tar.gz」。
+同一秒重名時另加 _v0.0.N，不覆蓋既有壓縮檔。
 選單未刷新時，儲存工作後登出並重新登入 Windows。
 
 更新：下載新版 ZIP、解壓縮，等壓縮工作完成並關閉程式，再執行新版 Setup.exe。
@@ -93,5 +96,5 @@ SHA256SUMS.txt 可用 PowerShell Get-FileHash -Algorithm SHA256 比對。
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--version', default='1.0.1')
+    parser.add_argument('--version', default='1.0.2')
     release(parser.parse_args().version)

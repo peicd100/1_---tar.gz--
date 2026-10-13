@@ -7,7 +7,7 @@ import sys
 import zipfile
 from xml.etree import ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
-package = ROOT / ('dist/TarGz-' + (sys.argv[1] if len(sys.argv) > 1 else '1.0.1') + '-x64.msix')
+package = ROOT / ('dist/TarGz-' + (sys.argv[1] if len(sys.argv) > 1 else '1.0.2') + '-x64.msix')
 with zipfile.ZipFile(package) as archive:
     names = archive.namelist()
     assert not any(n.lower().endswith(('.pfx', '.key', '.py', '.ps1')) for n in names)

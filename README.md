@@ -2,14 +2,16 @@
 
 Windows 11 x64 桌面工具。黑色簡約介面、清松手寫體 9 文青、透明壓縮盒圖示。
 
-目前版本 **1.0.1**：進度條顯示數字百分比。掃描檔案大小時為 0%；壓縮依已處理來源位元組推進 0–90%（空檔案／資料夾各計一單位）；讀回檢查依已讀壓縮檔位元組推進 90–99%；檢查通過並建立正式檔案後才顯示 100%。這是分階段工作量比例，不是剩餘時間預估。取消或失敗不會顯示 100%。
+目前版本 **1.0.2**：所有輸出名稱加入開始壓縮時的本機日期與時間（`yyyyMMdd_HHmmss`），例如 `資料夾_20261014_153025.tar.gz`、`報告.pdf_20261014_153025.tar.gz`；多選為 `選取項目_3個_20261014_153025.tar.gz`。同秒重名仍以 `_v0.0.N` 避免覆蓋。
+
+進度條顯示數字百分比。掃描檔案大小時為 0%；壓縮依已處理來源位元組推進 0–90%（空檔案／資料夾各計一單位）；讀回檢查依已讀壓縮檔位元組推進 90–99%；檢查通過並建立正式檔案後才顯示 100%。這是分階段工作量比例，不是剩餘時間預估。取消或失敗不會顯示 100%。
 
 ## 安裝與使用
 
 1. 執行 `dist/Setup.exe`。這是可離線使用的安裝／管理入口。
 2. 首次安裝勾選「允許管理此工具的簽章憑證」，再按「安裝」。Windows 會要求系統管理員授權，僅用於把本工具的公開簽章憑證加入本機 `TrustedPeople`。
 3. 在檔案總管選取檔案或資料夾，按右鍵 → **壓縮成 tar.gz**。若選單尚未刷新，請先儲存工作，再登出並重新登入 Windows。
-4. 輸出放在所選項目的共同上層目錄。多選會合併為一個壓縮檔。同名會自動加 `_v0.0.1`、`_v0.0.2` 等後綴。
+4. 輸出放在所選項目的共同上層目錄。多選會合併為一個壓縮檔。檔名後綴開始壓縮時的日期與時間。同名會自動加 `_v0.0.1`、`_v0.0.2` 等後綴。
 
 右鍵功能採用原生 `IExplorerCommand` 與已簽署 MSIX 套件。Windows 會依版本及使用者選單設定決定實際顯示位置、字體和配色。壓縮視窗與此安裝程式採自訂風格，Windows 系統授權／設定視窗仍使用系統樣式。
 
@@ -56,17 +58,17 @@ Windows 11 x64 桌面工具。黑色簡約介面、清松手寫體 9 文青、�
 ```powershell
 # 所需 Python 套件：Pillow、fonttools、cryptography；不會自動更動 Conda 環境。
 .\tools\bootstrap.ps1 -Python D:\conda\envs\PEICD100\python.exe
-.\tools\build.ps1 -Version 1.0.1 -Python D:\conda\envs\PEICD100\python.exe
+.\tools\build.ps1 -Version 1.0.2 -Python D:\conda\envs\PEICD100\python.exe
 ```
 
 使用系統 .NET Framework C# 編譯器及專案內可攜 LLVM-MinGW／Microsoft Windows SDK BuildTools；不改系統 PATH。建置產物在 `dist/`，大型快取與私鑰不進 Git。
 
 ## 提供給別人安裝與更新
 
-建置後執行以下命令，會重用已建置的安裝程式，產生 `dist/TarGz-1.0.1-Windows-x64.zip` 與外部 SHA-256 校驗碼：
+建置後執行以下命令，會重用已建置的安裝程式，產生 `dist/TarGz-1.0.2-Windows-x64.zip` 與外部 SHA-256 校驗碼：
 
 ```powershell
-& D:\conda\envs\PEICD100\python.exe tools/release.py --version 1.0.1
+& D:\conda\envs\PEICD100\python.exe tools/release.py --version 1.0.2
 ```
 
 ZIP 包含 `Setup.exe`、中文使用說明、公開憑證、字體作者／授權及檔案校驗碼。安裝套件已內嵌於 Setup，無需重複附上 MSIX。封裝前會檢查建置校驗碼與套件版本，完成後驗證 ZIP 清單、CRC 及所有內容；私鑰與原始碼不放入發布 ZIP。
@@ -86,6 +88,6 @@ ZIP 包含 `Setup.exe`、中文使用說明、公開憑證、字體作者／授�
 .\tests\verify_signature.ps1
 ```
 
-已驗證：9 項壓縮／取消／碰撞與錯誤處理、獨立 Python TAR 內容比對、同時壓縮同一來源、原生 COM 標題／狀態／生命週期／多選傳遞、介面離屏繪製、MSIX 所有區塊雜湊、CMS 簽章及簽署的 blockmap 綁定。診斷與畫面保留於 `build/`。junction 循環測試因環境拒絕建立測試連結而跳過，未宣稱通過。
+已驗證：10 項壓縮／取消／碰撞與錯誤處理、獨立 Python TAR 內容比對、同時壓縮同一來源、原生 COM 標題／狀態／生命週期／多選傳遞、介面離屏繪製、MSIX 所有區塊雜湊、CMS 簽章及簽署的 blockmap 綁定。診斷與畫面保留於 `build/`。junction 循環測試因環境拒絕建立測試連結而跳過，未宣稱通過。
 
 **尚待實機驗收**：本次受限工作階段的 `Get-AppxPackage` 回覆「存取被拒」，未執行系統安裝、信任匯入、真實版本升級、解除安裝，亦未在 Explorer 內確認選單顯示。請在一般桌面工作階段執行 `dist/Setup.exe` 完成第一輪實機確認。
